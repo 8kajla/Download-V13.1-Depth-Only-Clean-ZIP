@@ -39,17 +39,12 @@ if os.getenv("PAPER_TRADING", "true").lower() != "true":
 
 strategy = CapitalFirstStrategy(
     bankroll=float(os.getenv("STARTING_CAPITAL", "1000")),
-    max_market_exposure=float(os.getenv("MAX_MARKET_EXPOSURE", "300")),
-    max_order=float(os.getenv("MAX_ORDER_USD", "300")),
-    max_asset_exposure=float(os.getenv("MAX_ASSET_EXPOSURE", "300")),
     max_total_exposure=float(os.getenv("MAX_TOTAL_EXPOSURE", "300")),
     start_sec=float(os.getenv("START_TRADING_SECOND", "0")),
     stop_sec=float(os.getenv("STOP_TRADING_SECOND", "240")),
     hard_cutoff_seconds=float(os.getenv("HARD_CUTOFF_SECONDS", "60")),
-    max_depth_participation=float(os.getenv("MAX_DEPTH_PARTICIPATION", "0.25")),
     # Zero here because the trader's median 2s cadence is not a hard rule.
     min_trade_gap_seconds=float(os.getenv("MIN_TRADE_GAP_SECONDS", "0")),
-    min_bid_depth=float(os.getenv("MIN_BID_DEPTH", "1")),
 )
 
 ledger = PaperLedger(DATA / "paper_state.json", strategy.bankroll)
@@ -216,7 +211,7 @@ def main():
     global last_disc, last_maintenance, consecutive_errors
 
     startup_data_check()
-    p("BOT B | PAPER ONLY | V13 EVIDENCE-CONSTRAINED BEHAVIORAL MODEL")
+    p("BOT B | PAPER ONLY | V14 40PCT TRADER REPLICA")
 
     while True:
         try:
@@ -306,7 +301,6 @@ def main():
                     continue
 
                 exposure = ledger.exposure(market["condition"])
-                asset_exp = asset_exposure(market["asset"])
                 total_exp = ledger.total_open_cost()
                 state = market_entry_state(market["condition"], now)
 
@@ -323,7 +317,6 @@ def main():
                     up_depth=up_bid_depth,
                     down_depth=down_bid_depth,
                     now=now,
-                    asset_exposure=asset_exp,
                     total_exposure=total_exp,
                     market_entry_count=state["count"],
                     seconds_since_first_entry=state["seconds_since_first"],
@@ -377,45 +370,22 @@ def main():
                     continue
 
                 token = market["up"] if signal.side == "Up" else market["down"]
-                bid_depth = up_bid_depth if signal.side == "Up" else down_bid_depth
 
-                depth_cap = max(
-                    0.0,
-                    float(bid_depth)
-                    * float(signal.price)
-                    * strategy.max_depth_participation,
-                )
-
-                remaining_market = max(
-                    0.0,
-                    strategy.max_market_exposure - exposure,
-                )
-                remaining_asset = max(
-                    0.0,
-                    strategy.max_asset_exposure - asset_exp,
-                )
-                remaining_total = max(
-                    0.0,
-                    strategy.max_total_exposure - total_exp,
-                )
-
-                # IMPORTANT: the fill target is entry-state-conditioned size,
-                # not synthetic remaining capital.
+                # V14: 40% trader-notional target; $300 is the only
+                # experiment-level paper exposure ceiling.
                 target = strategy.entry_target(
                     signal.price,
                     market["asset"],
                     state["count"],
                 )
-
+                remaining_total = max(
+                    0.0,
+                    strategy.max_total_exposure - ledger.total_open_cost(),
+                )
                 notion = min(
-                    target,
                     signal.notional,
-                    strategy.max_order,
-                    depth_cap,
-                    remaining_market,
-                    remaining_asset,
-                    remaining_total,
                     max(0.0, ledger.cash),
+                    remaining_total,
                 )
 
                 if notion < float(os.getenv("MIN_PAPER_FILL_USD", "0.10")):
