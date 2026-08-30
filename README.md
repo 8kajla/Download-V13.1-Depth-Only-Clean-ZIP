@@ -97,7 +97,7 @@ python -m py_compile strategy.py bot.py paper_ledger.py market_discovery.py rese
 The tests cover fine-band boundaries, entry-state sizing, side persistence, empirical trajectory preference, final-minute cutoff, depth limits, resolution accounting, and research logging.
 
 
-## V13.1 controlled experiment
+## V13.1 controlled experiment — $300 total exposure
 
 V13.1 changes one strategy variable only: the minimum depth gate for CORE and
 HIGH is loosened to 1.0 for BTC, ETH, SOL, and BNB. Spread gates, sizing,
@@ -105,3 +105,12 @@ trajectory logic, side persistence, cutoff, and accounting are unchanged.
 The purpose is to test whether the verified CORE/HIGH starvation was caused
 by the regime-scaled depth gate. If CORE/HIGH share does not recover, the
 next experiment should change spread only—not both together.
+
+
+### $300 paper exposure setting
+
+The previous `$35 per asset × 4 assets = $140` practical ceiling is removed.
+For this experiment, the paper governor is configured so market, asset and
+individual order limits can each reach $300, while the total open paper
+exposure remains capped at $300. These are paper-account controls, not claims
+about the reference trader's actual maximum exposure.
