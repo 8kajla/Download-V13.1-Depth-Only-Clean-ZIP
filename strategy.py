@@ -37,7 +37,7 @@ class CapitalFirstStrategy:
     causal trading trigger.
     """
 
-    VERSION = "V13.1_DEPTH_ONLY"
+    VERSION = "V13.1_DEPTH_ONLY_300CAP"
 
     # V13.1 controlled experiment: CORE/HIGH depth gate loosened from
     # regime-scaled 3-8 to 1.0; spread gates remain unchanged.
@@ -123,18 +123,18 @@ class CapitalFirstStrategy:
         },
     }
 
-    HARD_MAX_ORDER = 10.0
-    HARD_MAX_MARKET = 100.0
-    HARD_MAX_ASSET = 35.0
+    HARD_MAX_ORDER = 300.0
+    HARD_MAX_MARKET = 300.0
+    HARD_MAX_ASSET = 300.0
     HARD_MAX_TOTAL = 300.0
     HARD_CUTOFF = 60.0
 
     def __init__(
         self,
         bankroll=1000,
-        max_market_exposure=100,
-        max_order=10,
-        max_asset_exposure=35,
+        max_market_exposure=300,
+        max_order=300,
+        max_asset_exposure=300,
         max_total_exposure=300,
         start_sec=0,
         stop_sec=240,
