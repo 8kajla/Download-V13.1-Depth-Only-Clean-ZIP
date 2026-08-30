@@ -1,418 +1,88 @@
 from __future__ import annotations
-
 from dataclasses import dataclass
-import time
-from typing import Dict, Iterable, List, Optional, Tuple
-
+import json,time
+from pathlib import Path
+from typing import Dict,Iterable,List,Optional,Tuple
 
 @dataclass
 class Signal:
-    side: str
-    price: float
-    score: float
-    notional: float
-    reason: str
-
+    side:str
+    price:float
+    score:float
+    notional:float
+    reason:str
 
 class CapitalFirstStrategy:
-    """
-    Evidence-constrained behavioral replica.
-
-    This module deliberately separates:
-      - CONFIRMED behavioral observations
-      - execution/safety constraints
-      - UNKNOWN private trigger mechanics
-
-    No synthetic momentum threshold, composite alpha score, or invented
-    state-reset rule is used.
-
-    The directional preference is based only on the measured price-trajectory
-    distribution by coarse regime:
-      CHEAP: buy while falling 56.4%, rising 20.0%, flat 23.6%
-      MID:   buy while falling 45.0%, rising 41.0%, flat 14.0%
-      CORE:  buy while rising 54.2%, falling 33.4%, flat 12.4%
-      HIGH:  buy while rising 61.0%, falling 17.1%, flat 21.9%
-
-    These are used as empirical directional likelihoods, not as proof of a
-    causal trading trigger.
-    """
-
-    VERSION = "V13.1_DEPTH_ONLY_300CAP"
-
-    # V13.1 controlled experiment: CORE/HIGH depth gate loosened from
-    # regime-scaled 3-8 to 1.0; spread gates remain unchanged.
-
-    BANDS: Tuple[Tuple[str, float, float, str], ...] = (
-        ("C00_05", 0.00, 0.05, "CHEAP"),
-        ("C05_10", 0.05, 0.10, "CHEAP"),
-        ("C10_15", 0.10, 0.15, "CHEAP"),
-        ("C15_20", 0.15, 0.20, "CHEAP"),
-        ("C20_30", 0.20, 0.30, "CHEAP"),
-        ("M30_40", 0.30, 0.40, "MID"),
-        ("M40_50", 0.40, 0.50, "MID"),
-        ("M50_60", 0.50, 0.60, "MID"),
-        ("M60_70", 0.60, 0.70, "MID"),
-        ("R70_80", 0.70, 0.80, "CORE"),
-        ("R80_90", 0.80, 0.90, "CORE"),
-        ("H90_95", 0.90, 0.95, "HIGH"),
-        ("H95_100", 0.95, 1.00, "HIGH"),
-    )
-
-    # Existing empirically-derived smooth price/capital curve retained.
-    # Entry-count multipliers below are now derived directly from the verified
-    # combined 12,337-trade entry-state medians.
-    BASE_CAPITAL: Dict[str, float] = {
-        "C00_05": 0.41,
-        "C05_10": 0.51,
-        "C10_15": 0.68,
-        "C15_20": 0.83,
-        "C20_30": 0.95,
-        "M30_40": 1.48,
-        "M40_50": 2.17,
-        "M50_60": 3.08,
-        "M60_70": 3.93,
-        "R70_80": 5.25,
-        "R80_90": 8.28,
-        "H90_95": 14.99,
-        "H95_100": 30.78,
-    }
-
-    # Confirmed median notional by regime and entry state:
-    # (first, entries 2-3, entries 4+).
-    ENTRY_MEDIANS = {
-        "CHEAP": (0.40, 0.52, 0.61),
-        "MID":   (1.92, 1.92, 2.07),
-        "CORE":  (4.34, 4.61, 5.03),
-        "HIGH":  (5.70, 12.96, 13.29),
-    }
-
-    # Confirmed combined-sample trade-count priors by asset x coarse regime.
-    MARKET_REGIME_WEIGHT = {
-        "BTC": {"CHEAP": 0.39, "MID": 0.40, "CORE": 0.12, "HIGH": 0.09},
-        "ETH": {"CHEAP": 0.54, "MID": 0.28, "CORE": 0.09, "HIGH": 0.08},
-        "SOL": {"CHEAP": 0.65, "MID": 0.22, "CORE": 0.07, "HIGH": 0.05},
-        "BNB": {"CHEAP": 0.57, "MID": 0.27, "CORE": 0.11, "HIGH": 0.05},
-    }
-
-    # Empirical price-trajectory shares from 9,651 consecutive same-market
-    # pairs. Keys are movement classes observed immediately before a buy.
-    TRAJECTORY_SHARE = {
-        "CHEAP": {"rising": 0.200, "falling": 0.564, "flat": 0.236},
-        "MID":   {"rising": 0.410, "falling": 0.450, "flat": 0.140},
-        "CORE":  {"rising": 0.542, "falling": 0.334, "flat": 0.124},
-        "HIGH":  {"rising": 0.610, "falling": 0.171, "flat": 0.219},
-    }
-
-    # Execution-only checks. These are not claimed to be trader rules.
-    MARKET_CHECKS = {
-        "BTC": {
-            "depth": {"CHEAP": 1.0, "MID": 2.0, "CORE": 1.0, "HIGH": 1.0},
-            "spread": {"CHEAP": 0.060, "MID": 0.050, "CORE": 0.035, "HIGH": 0.025},
-        },
-        "ETH": {
-            "depth": {"CHEAP": 1.0, "MID": 2.0, "CORE": 1.0, "HIGH": 1.0},
-            "spread": {"CHEAP": 0.065, "MID": 0.055, "CORE": 0.040, "HIGH": 0.027},
-        },
-        "SOL": {
-            "depth": {"CHEAP": 1.0, "MID": 2.0, "CORE": 1.0, "HIGH": 1.0},
-            "spread": {"CHEAP": 0.060, "MID": 0.050, "CORE": 0.035, "HIGH": 0.025},
-        },
-        "BNB": {
-            "depth": {"CHEAP": 1.0, "MID": 2.0, "CORE": 1.0, "HIGH": 1.0},
-            "spread": {"CHEAP": 0.060, "MID": 0.050, "CORE": 0.035, "HIGH": 0.025},
-        },
-    }
-
-    HARD_MAX_ORDER = 300.0
-    HARD_MAX_MARKET = 300.0
-    HARD_MAX_ASSET = 300.0
-    HARD_MAX_TOTAL = 300.0
-    HARD_CUTOFF = 60.0
-
-    def __init__(
-        self,
-        bankroll=1000,
-        max_market_exposure=300,
-        max_order=300,
-        max_asset_exposure=300,
-        max_total_exposure=300,
-        start_sec=0,
-        stop_sec=240,
-        hard_cutoff_seconds=60,
-        max_depth_participation=0.25,
-        min_trade_gap_seconds=0,
-        min_bid_depth=1,
-        **_,
-    ):
-        self.bankroll = float(bankroll)
-        self.max_market_exposure = min(float(max_market_exposure), self.HARD_MAX_MARKET)
-        self.max_order = min(float(max_order), self.HARD_MAX_ORDER)
-        self.max_asset_exposure = min(float(max_asset_exposure), self.HARD_MAX_ASSET)
-        self.max_total_exposure = min(float(max_total_exposure), self.HARD_MAX_TOTAL)
-        self.start_sec = max(0.0, float(start_sec))
-        self.stop_sec = min(300.0, float(stop_sec))
-        self.hard_cutoff_seconds = max(60.0, float(hard_cutoff_seconds))
-        self.max_depth_participation = min(0.25, max(0.01, float(max_depth_participation)))
-        # Infrastructure rate limit only; 0 means no behavioral distortion.
-        self.min_trade_gap_seconds = max(0.0, float(min_trade_gap_seconds))
-        self.min_bid_depth = max(0.0, float(min_bid_depth))
-        self._last_trade_at: Optional[float] = None
-
+    VERSION="V14_40PCT_TRADER_REPLICA"
+    DATA_FILE=Path(__file__).with_name("trader_behavior.json")
+    BANDS:Tuple[Tuple[str,float,float,str],...]=(("C00_05",0,.05,"CHEAP"),("C05_10",.05,.10,"CHEAP"),("C10_15",.10,.15,"CHEAP"),("C15_20",.15,.20,"CHEAP"),("C20_30",.20,.30,"CHEAP"),("M30_40",.30,.40,"MID"),("M40_50",.40,.50,"MID"),("M50_60",.50,.60,"MID"),("M60_70",.60,.70,"MID"),("R70_80",.70,.80,"CORE"),("R80_90",.80,.90,"CORE"),("H90_95",.90,.95,"HIGH"),("H95_100",.95,1.0,"HIGH"))
+    TRAJECTORY_SHARE={"CHEAP":{"rising":.200,"falling":.564,"flat":.236},"MID":{"rising":.410,"falling":.450,"flat":.140},"CORE":{"rising":.542,"falling":.334,"flat":.124},"HIGH":{"rising":.610,"falling":.171,"flat":.219}}
+    HARD_CUTOFF=60.0
+    def __init__(self,bankroll=1000,start_sec=0,stop_sec=240,hard_cutoff_seconds=60,max_total_exposure=300,min_trade_gap_seconds=0,behavior_file=None,**_):
+        self.bankroll=float(bankroll); self.start_sec=max(0,float(start_sec)); self.stop_sec=min(300,float(stop_sec)); self.hard_cutoff_seconds=max(60,float(hard_cutoff_seconds)); self.max_total_exposure=max(0,float(max_total_exposure)); self.min_trade_gap_seconds=max(0,float(min_trade_gap_seconds)); self._last_trade_at=None
+        path=Path(behavior_file) if behavior_file else self.DATA_FILE
+        with path.open(encoding='utf-8') as f:self.behavior=json.load(f)
+        self.notional_scale=float(self.behavior.get('notional_scale',.4))
+        self.fine_band_trade_share={x['fine_band']:float(x['trade_share']) for x in self.behavior['fine_bands']}
+        self.entry_medians=self.behavior['entry_median_by_fine_band']
+    @classmethod
+    def fine_band(cls,price):
+        p=float(price)
+        for band,lo,hi,regime in cls.BANDS:
+            if lo<=p<hi:return band,regime
+        if p==1:return 'H95_100','HIGH'
+        return None,None
+    def entry_target(self,price,market='BTC',entry_count=0):
+        del market
+        band,_=self.fine_band(price)
+        if not band:return 0.0
+        lookup=self.entry_medians.get(band,{})
+        key=str(entry_count+1) if int(entry_count)<20 else '21+'
+        value=lookup.get(key)
+        if value is None:
+            for k in ('1','2','21+'):
+                if k in lookup:value=lookup[k];break
+        return max(0.10,float(value or 0.0))
+    capital_target=entry_target
     @staticmethod
-    def normalize_market(x) -> str:
-        s = str(x or "").upper()
-        for m in ("BTC", "ETH", "SOL", "BNB"):
-            if m in s:
-                return m
-        return "BTC"
-
-    @classmethod
-    def fine_band(cls, price):
-        p = float(price)
-        for band, lo, hi, regime in cls.BANDS:
-            if lo <= p < hi:
-                return band, regime
-        if p == 1.0:
-            return "H95_100", "HIGH"
-        return None, None
-
-    @classmethod
-    def capital_target(cls, price, market="BTC", entry_count=0):
-        band, regime = cls.fine_band(price)
-        if not band:
-            return 0.0
-
-        base = float(cls.BASE_CAPITAL[band])
-        first, second_third, fourth_plus = cls.ENTRY_MEDIANS[regime]
-
-        # Entry-state ratios are data-derived, not hand-chosen.
-        if entry_count <= 0:
-            ratio = 1.0
-        elif entry_count <= 3:
-            ratio = second_third / first
-        else:
-            ratio = fourth_plus / first
-
-        return max(0.20, base * ratio)
-
-    @classmethod
-    def entry_target(cls, price, market="BTC", entry_count=0):
-        return cls.capital_target(price, market, entry_count)
-
-    def desired_capital(self, price, regime=None, market="BTC", entry_count=0):
-        return self.entry_target(price, market, entry_count)
-
-    @staticmethod
-    def _points(history: Iterable) -> List[Tuple[float, float]]:
-        out = []
+    def _points(history):
+        out=[]
         for item in history or []:
             try:
-                if isinstance(item, dict):
-                    ts = float(item["ts"])
-                    price = float(item.get("best_bid", item.get("mid")))
-                else:
-                    ts, price = float(item[0]), float(item[1])
-                if 0.0 < price < 1.0:
-                    out.append((ts, price))
-            except (TypeError, ValueError, KeyError, IndexError):
-                continue
+                ts=float(item['ts']) if isinstance(item,dict) else float(item[0]); p=float(item.get('best_bid',item.get('mid'))) if isinstance(item,dict) else float(item[1])
+                if 0<p<1:out.append((ts,p))
+            except (TypeError,ValueError,KeyError,IndexError):pass
         return sorted(out)
-
     @classmethod
-    def movement(cls, price, history, now):
-        pts = cls._points(history)
-        result = {}
-        for seconds in (1, 3, 5, 10, 30):
-            prior = [p for t, p in pts if t <= float(now) - seconds]
-            result[f"m{seconds}"] = float(price) - prior[-1] if prior else 0.0
-        return result
-
+    def movement(cls,price,history,now):
+        pts=cls._points(history); out={}
+        for sec in (1,3,5,10,30):
+            prev=[p for t,p in pts if t<=float(now)-sec]
+            out[f'm{sec}']=float(price)-prev[-1] if prev else 0
+        return out
     @staticmethod
-    def _trajectory_class(delta: float) -> str:
-        if delta > 0:
-            return "rising"
-        if delta < 0:
-            return "falling"
-        return "flat"
-
-    def _book_ok(self, market, regime, bid, ask, depth):
-        m = self.normalize_market(market)
-        req = max(self.min_bid_depth, self.MARKET_CHECKS[m]["depth"][regime])
-        if float(depth or 0.0) < req:
-            return False, 0.0
-
-        spread = 0.0 if ask is None else max(0.0, float(ask) - float(bid))
-        allowed = self.MARKET_CHECKS[m]["spread"][regime]
-        return spread <= allowed, spread
-
-    def _candidate(
-        self,
-        market,
-        side,
-        bid,
-        ask,
-        depth,
-        history,
-        now,
-        thesis_side,
-        entries,
-        burst_age,
-    ):
-        if bid is None:
-            return None
-        try:
-            bid = float(bid)
-            depth = max(0.0, float(depth or 0.0))
-            ask = None if ask is None else float(ask)
-        except (TypeError, ValueError):
-            return None
-
-        if not 0.0 < bid < 1.0:
-            return None
-
-        band, regime = self.fine_band(bid)
-        if not regime:
-            return None
-
-        book_ok, spread = self._book_ok(market, regime, bid, ask, depth)
-        if not book_ok:
-            return None
-
-        movement = self.movement(bid, history, now)
-        trajectory = self._trajectory_class(movement["m5"])
-        likelihood = self.TRAJECTORY_SHARE[regime][trajectory]
-
-        same_side = bool(thesis_side and side == thesis_side)
-
-        return {
-            "market": self.normalize_market(market),
-            "side": side,
-            "bid": bid,
-            "ask": ask,
-            "depth": depth,
-            "spread": spread,
-            "band": band,
-            "regime": regime,
-            "trajectory": trajectory,
-            "trajectory_likelihood": likelihood,
-            "same_side": same_side,
-            "target": self.entry_target(bid, market, entries),
-            "movement": movement,
-            "entries": int(entries),
-            "burst_age": float(burst_age),
-        }
-
-    def decide(
-        self,
-        elapsed,
-        up_ask,
-        down_ask,
-        up_bid,
-        down_bid,
-        up_history,
-        down_history,
-        current_exposure,
-        available_cash,
-        up_depth=0,
-        down_depth=0,
-        now=None,
-        asset_exposure=0,
-        total_exposure=0,
-        market_entry_count=0,
-        seconds_since_first_entry=0,
-        thesis_side=None,
-        thesis_price=None,
-        asset=None,
-        market=None,
-    ):
-        now = time.time() if now is None else float(now)
-        elapsed = float(elapsed)
-        m = self.normalize_market(market or asset)
-
-        if elapsed < self.start_sec or elapsed >= self.stop_sec:
-            return None
-        if self.stop_sec - elapsed <= self.hard_cutoff_seconds:
-            return None
-        if self._last_trade_at is not None and self.min_trade_gap_seconds:
-            if now - self._last_trade_at < self.min_trade_gap_seconds:
-                return None
-
-        candidates = [
-            c for c in (
-                self._candidate(
-                    m, "Up", up_bid, up_ask, up_depth, up_history, now,
-                    thesis_side, market_entry_count, seconds_since_first_entry
-                ),
-                self._candidate(
-                    m, "Down", down_bid, down_ask, down_depth, down_history, now,
-                    thesis_side, market_entry_count, seconds_since_first_entry
-                ),
-            )
-            if c is not None
-        ]
-        if not candidates:
-            return None
-
-        # Confirmed side persistence is implemented as a preference, not an
-        # invented jump/cooldown reset rule.
-        same_side = [c for c in candidates if c["same_side"]]
-        if thesis_side and same_side:
-            best = max(
-                same_side,
-                key=lambda c: (c["trajectory_likelihood"], c["depth"], -c["spread"])
-            )
-        else:
-            # With no known thesis, choose using only the measured trajectory
-            # distribution, then use execution quality as a tie-breaker.
-            best = max(
-                candidates,
-                key=lambda c: (c["trajectory_likelihood"], c["depth"], -c["spread"])
-            )
-
-        target = float(best["target"])
-
-        # Individual entry size is now conditioned directly on entry state;
-        # no synthetic "remaining target" or arbitrary slice cap is applied.
-        room = min(
-            target,
-            self.max_order,
-            max(0.0, self.max_market_exposure - float(current_exposure)),
-            max(0.0, self.max_asset_exposure - float(asset_exposure)),
-            max(0.0, self.max_total_exposure - float(total_exposure)),
-            max(0.0, float(available_cash)),
-            max(
-                0.0,
-                float(best["depth"]) * float(best["bid"]) * self.max_depth_participation,
-            ),
-        )
-        if room < 0.10:
-            return None
-
-        self._last_trade_at = now
-        mv = best["movement"]
-
-        reason = (
-            f"V13 market={m} band={best['band']} regime={best['regime']} "
-            f"behavior=EMPIRICAL_TRAJECTORY preference="
-            f"{best['trajectory']} likelihood={best['trajectory_likelihood']:.3f} "
-            f"side_persistence={'same' if best['same_side'] else 'no_thesis'} "
-            f"passive=bid target=${target:.2f} entry_count={market_entry_count} "
-            f"burst_age={float(seconds_since_first_entry):.1f}s "
-            f"bid={best['bid']:.4f} "
-            f"ask={best['ask'] if best['ask'] is not None else 0:.4f} "
-            f"spread={best['spread']:.4f} depth={best['depth']:.2f} "
-            f"m1={mv['m1']:+.4f} m3={mv['m3']:+.4f} m5={mv['m5']:+.4f} "
-            f"m10={mv['m10']:+.4f} m30={mv['m30']:+.4f} "
-            f"elapsed={elapsed:.1f}s left={self.stop_sec-elapsed:.1f}s"
-        )
-
-        return Signal(
-            side=best["side"],
-            price=best["bid"],
-            score=best["trajectory_likelihood"],
-            notional=round(room, 2),
-            reason=reason,
-        )
-
-    def size(self, price, regime=None, market="BTC", entry_count=0, **_):
-        return self.entry_target(price, market, entry_count)
+    def _trajectory_class(delta):return 'rising' if delta>0 else ('falling' if delta<0 else 'flat')
+    def _candidate(self,market,side,bid,ask,depth,history,now,thesis_side,entries,burst_age):
+        if bid is None:return None
+        try:bid=float(bid); ask=None if ask is None else float(ask); depth=None if depth is None else float(depth)
+        except (TypeError,ValueError):return None
+        if not 0<bid<1:return None
+        band,regime=self.fine_band(bid)
+        if not regime:return None
+        mv=self.movement(bid,history,now); traj=self._trajectory_class(mv['m5']); tl=self.TRAJECTORY_SHARE[regime][traj]; bp=self.fine_band_trade_share.get(band,0)
+        return {'side':side,'bid':bid,'ask':ask,'depth':depth,'band':band,'regime':regime,'trajectory':traj,'trajectory_likelihood':tl,'band_prior':bp,'same_side':bool(thesis_side and side==thesis_side),'target':self.entry_target(bid,market,entries),'movement':mv,'entries':int(entries),'burst_age':float(burst_age)}
+    def decide(self,elapsed,up_ask,down_ask,up_bid,down_bid,up_history,down_history,current_exposure,available_cash,up_depth=0,down_depth=0,now=None,asset_exposure=0,total_exposure=0,market_entry_count=0,seconds_since_first_entry=0,thesis_side=None,thesis_price=None,asset=None,market=None):
+        del current_exposure,asset_exposure,thesis_price
+        now=time.time() if now is None else float(now); elapsed=float(elapsed)
+        if elapsed<self.start_sec or elapsed>=self.stop_sec or self.stop_sec-elapsed<=self.hard_cutoff_seconds:return None
+        if self._last_trade_at is not None and self.min_trade_gap_seconds and now-self._last_trade_at<self.min_trade_gap_seconds:return None
+        m=str(market or asset or 'BTC').upper(); candidates=[c for c in (self._candidate(m,'Up',up_bid,up_ask,up_depth,up_history,now,thesis_side,market_entry_count,seconds_since_first_entry),self._candidate(m,'Down',down_bid,down_ask,down_depth,down_history,now,thesis_side,market_entry_count,seconds_since_first_entry)) if c]
+        if not candidates:return None
+        same=[c for c in candidates if c['same_side']]; pool=same if thesis_side and same else candidates
+        best=max(pool,key=lambda c:(c['band_prior']*c['trajectory_likelihood'],c['band_prior'],c['trajectory_likelihood']))
+        target=float(best['target']); remaining=max(0,self.max_total_exposure-float(total_exposure)); notion=min(target,max(0,float(available_cash)),remaining)
+        if notion<.10:return None
+        self._last_trade_at=now; mv=best['movement']
+        reason=(f'{self.VERSION} band={best["band"]} regime={best["regime"]} trajectory={best["trajectory"]} band_prior={best["band_prior"]:.6f} trajectory_likelihood={best["trajectory_likelihood"]:.3f} same_side={best["same_side"]} passive=bid target_40pct=${target:.2f} entry_count={market_entry_count} burst_age={float(seconds_since_first_entry):.1f}s bid={best["bid"]:.4f} ask={best["ask"] if best["ask"] is not None else 0:.4f} depth={best["depth"] if best["depth"] is not None else 0:.2f} m1={mv["m1"]:+.4f} m3={mv["m3"]:+.4f} m5={mv["m5"]:+.4f} m10={mv["m10"]:+.4f} m30={mv["m30"]:+.4f} elapsed={elapsed:.1f}s left={self.stop_sec-elapsed:.1f}s')
+        return Signal(best['side'],best['bid'],best['trajectory_likelihood'],round(notion,2),reason)
+    def size(self,price,regime=None,market='BTC',entry_count=0,**_):del regime;return self.entry_target(price,market,entry_count)
