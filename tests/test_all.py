@@ -11,9 +11,9 @@ from research_logger import ResearchLogger
 def strategy():
     return CapitalFirstStrategy(
         min_trade_gap_seconds=0,
-        max_market_exposure=100,
-        max_order=10,
-        max_asset_exposure=35,
+        max_market_exposure=300,
+        max_order=300,
+        max_asset_exposure=300,
         max_total_exposure=300,
         hard_cutoff_seconds=60,
         min_bid_depth=1,
@@ -204,3 +204,11 @@ def test_paper_resolution_and_research_logging():
         )
         assert "RESOLVED" in (root / "resolutions.csv").read_text()
         assert ",4.0," in (root / "resolutions.csv").read_text()
+
+
+def test_v131_300_cap_removes_140_dollar_four_asset_ceiling():
+    s = strategy()
+    assert s.HARD_MAX_ORDER == 300.0
+    assert s.HARD_MAX_MARKET == 300.0
+    assert s.HARD_MAX_ASSET == 300.0
+    assert s.HARD_MAX_TOTAL == 300.0
