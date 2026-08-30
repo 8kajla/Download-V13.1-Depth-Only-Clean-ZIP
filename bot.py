@@ -39,9 +39,9 @@ if os.getenv("PAPER_TRADING", "true").lower() != "true":
 
 strategy = CapitalFirstStrategy(
     bankroll=float(os.getenv("STARTING_CAPITAL", "1000")),
-    max_market_exposure=float(os.getenv("MAX_MARKET_EXPOSURE", "100")),
-    max_order=float(os.getenv("MAX_ORDER_USD", "10")),
-    max_asset_exposure=float(os.getenv("MAX_ASSET_EXPOSURE", "35")),
+    max_market_exposure=float(os.getenv("MAX_MARKET_EXPOSURE", "300")),
+    max_order=float(os.getenv("MAX_ORDER_USD", "300")),
+    max_asset_exposure=float(os.getenv("MAX_ASSET_EXPOSURE", "300")),
     max_total_exposure=float(os.getenv("MAX_TOTAL_EXPOSURE", "300")),
     start_sec=float(os.getenv("START_TRADING_SECOND", "0")),
     stop_sec=float(os.getenv("STOP_TRADING_SECOND", "240")),
